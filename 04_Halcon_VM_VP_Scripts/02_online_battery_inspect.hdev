@@ -1,0 +1,47 @@
+* ============================================================================
+* Halcon 在线检测脚本: 锂电顶盖刚性摆正 + 三圆亚像素测量 + Zone A/B 分区判废
+* ============================================================================
+dev_update_off ()
+read_shape_model ('../models/battery_shape_model.shm', ModelID)
+
+PixelScale := 0.015
+RefRow := 1024.0
+RefCol := 1024.0
+
+for Index := 0 to 19 by 1
+    read_image (Image, '../data/battery_images/cell_' + Index$'02d' + '.bmp')
+
+    * 1. 形状匹配高速定位
+    find_shape_model (Image, ModelID, -rad(25), rad(50), 0.7, 1, 0.5, 'least_squares', 0, 0.9, Row, Column, Angle, Score)
+    if (|Score| > 0)
+        * 2. 刚性仿射变换将工件拉回标准水平坐标系
+        vector_angle_to_rigid (Row, Column, Angle, RefRow, RefCol, 0, HomMat2D)
+        affine_trans_image (Image, ImageAligned, HomMat2D, 'constant', 'false')
+
+        * 3. 同步创建三圆亚像素卡尺: 左负极柱(624,1024)、右正极柱(1424,1024)、注液孔(1230,1024)
+        create_metrology_model (MetrologyHandle)
+        Rows := [1024, 1024, 1024]
+        Cols := [624, 1424, 1230]
+        Radii := [60, 60, 40]
+        add_metrology_object_circle_measure (MetrologyHandle, Rows, Cols, Radii, 18, 5, 1.0, 25, ['measure_transition','measure_select'], ['positive','first'], Indices)
+        apply_metrology_model (ImageAligned, MetrologyHandle)
+
+        * 4. 提取极柱圆心计算中心距 (Pitch) 及注液孔物理直径
+        get_metrology_object_result (MetrologyHandle, Indices[0], 'all', 'result_type', ['row','column'], LeftPoleCenter)
+        get_metrology_object_result (MetrologyHandle, Indices[1], 'all', 'result_type', ['row','column'], RightPoleCenter)
+        get_metrology_object_result (MetrologyHandle, Indices[2], 'all', 'result_type', 'radius', InjHoleRadiusPx)
+        distance_pp (LeftPoleCenter[0], LeftPoleCenter[1], RightPoleCenter[0], RightPoleCenter[1], PolePitchPx)
+
+        PolePitchMM := PolePitchPx * PixelScale
+        InjHoleDiaMM := InjHoleRadiusPx * 2.0 * PixelScale
+        clear_metrology_model (MetrologyHandle)
+
+        * 5. 裁剪中心 640x640 ROI 供 YOLO ONNX 推理，并定义防爆阀 A 区禁区椭圆
+        crop_rectangle1 (ImageAligned, ImageROIForYOLO, 704, 704, 1343, 1343)
+        gen_ellipse (RegionZoneA_Valve, 320, 320, 0, 115, 70)
+
+        * 6. (示例) 与 YOLO 检出的缺陷 Region 求交集完成 A/B 分区判废
+        * intersection (RegionDefectFromYOLO, RegionZoneA_Valve, RegionOverlapZoneA)
+        * area_center (RegionOverlapZoneA, AreaInZoneA, RowA, ColA)
+    endif
+endfor

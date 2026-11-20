@@ -1,0 +1,19 @@
+* ============================================================================
+* Halcon 离线建模脚本: 方形动力锂电池顶盖形状模板创建 (01_create_battery_model.hdev)
+* ============================================================================
+dev_update_off ()
+read_image (ImageTemplate, '../data/battery_images/battery_template.bmp')
+dev_close_window ()
+dev_open_window_fit_image (ImageTemplate, 0, 0, 800, 500, WindowHandle)
+dev_display (ImageTemplate)
+
+* 框选顶盖外轮廓与左下角防呆倒角区域作为定位模板 ROI
+gen_rectangle1 (ModelROI, 820, 400, 1225, 1650)
+reduce_domain (ImageTemplate, ModelROI, ImageReduced)
+
+* 创建形状匹配模板 (覆盖 ±25° 旋转范围，使用极性保证定位精度与速度)
+create_shape_model (ImageReduced, 'auto', -rad(25), rad(50), 'auto', 'auto', 'use_polarity', 'auto', 'auto', ModelID)
+get_shape_model_contours (ModelContours, ModelID, 1)
+
+* 保存模板供在线检测及 C# 上位机调用
+write_shape_model (ModelID, '../models/battery_shape_model.shm')
